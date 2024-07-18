@@ -1,4 +1,5 @@
 # Deep Residual Learning for Image Recognition
+Modified from [flaxmodels](https://github.com/matthias-wright/flaxmodels) to support other features, such as grad-cam and guided backward propagation.
 
 <b>Paper:</b> <a href="https://arxiv.org/abs/1512.03385">https://arxiv.org/abs/1512.03385</a>  
 <b>Repository:</b> <a href="https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py">https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py</a>

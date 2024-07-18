@@ -2,6 +2,9 @@
 <div align="center"><h3>Flax Models</h3></div>
 <div align="center">A collection of pretrained models in <a href="https://github.com/google/flax">Flax</a>.</div>
 
+Modified from [flaxmodels](https://github.com/matthias-wright/flaxmodels) to support other features, such as grad-cam and guided backward propagation.
+
+
 </br>
 
 <!-- ABOUT -->
@@ -22,7 +25,10 @@ You will need Python 3.7 or later.
 1. For GPU usage, follow the <a href="https://github.com/google/jax#installation">Jax</a> installation with CUDA.
 2. Then install:
    ```sh
-   > pip install --upgrade git+https://github.com/matthias-wright/flaxmodels.git
+   git clone https://github.com/LYK-love/flaxmodels.git
+   cd ./flaxmodels
+   pip install -e .
+   cd ..
    ```
 For CPU-only you can skip step 1.
 
@@ -35,8 +41,8 @@ The checkpoints are taken from the repositories that are referenced on the model
 ### Testing
 To run the tests, pytest needs to be installed. 
 ```sh
-> git clone https://github.com/matthias-wright/flaxmodels.git
-> cd flaxmodels
+> git clone https://github.com/LYK-love/flaxmodels.git
+> cd ./flaxmodels
 > python -m pytest tests/
 ```
 See [here](docs/Documentation.md#2-testing) for an explanation of the testing strategy.
