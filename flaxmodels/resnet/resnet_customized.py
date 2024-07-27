@@ -2,11 +2,12 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 import functools
-from typing import Any, Callable, Iterable, Optional, Tuple, Union
+from typing import Any, Callable, Iterable, Optional, Tuple, Union, List
 import h5py
 import warnings
 from . import ops
 from .. import utils
+from dataclasses import dataclass, field
 
 
 URLS = {
@@ -26,7 +27,7 @@ LAYERS = {
 }
 
 
-def observe(module: nn.Module, x: jax.Array) -> jax.Array:
+def observe(module: nn.Module, x: jax.Array, idx: int = 4) -> jax.Array:
     """
     A flax module layer for Grad-CAM observation of the output that is passed in.
     Returns x with no changes, this simply adds model parameters for storing values for the Grad-CAM.
@@ -35,8 +36,9 @@ def observe(module: nn.Module, x: jax.Array) -> jax.Array:
     - module: Flax module to make the observation of
     - x: forward pass value to observe
     """
-    x = module.perturb("gradcam_perturb", x)
-    module.sow("intermediates", "gradcam_sow", x)
+
+    x = module.perturb(f"gradcam_perturb_{idx}", x)
+    module.sow("intermediates", f"gradcam_sow_{idx}", x)
     return x
 
 
@@ -69,7 +71,7 @@ class BasicBlock(nn.Module):
     dtype: str = "float32"
 
     @nn.compact
-    def __call__(self, x, act, train=True):
+    def __call__(self, x, act, train=True, observe_layers_in_block: List[int] = []):
         """
         Run Basic Block.
 
@@ -97,6 +99,9 @@ class BasicBlock(nn.Module):
             dtype=self.dtype,
         )(x)
 
+        if len(observe_layers_in_block) > 0 and 1 in observe_layers_in_block:
+            x = observe(self, x, idx=1)
+
         x = ops.batch_norm(
             x,
             train=train,
@@ -120,6 +125,9 @@ class BasicBlock(nn.Module):
             use_bias=False,
             dtype=self.dtype,
         )(x)
+
+        if len(observe_layers_in_block) > 0 and 2 in observe_layers_in_block:
+            x = observe(self, x, idx=2)
 
         x = ops.batch_norm(
             x,
@@ -196,7 +204,7 @@ class Bottleneck(nn.Module):
     dtype: str = "float32"
 
     @nn.compact
-    def __call__(self, x, act, train=True):
+    def __call__(self, x, act, train=True, observe_layers_in_block: List[int] = []):
         """
         Run Bottleneck.
 
@@ -223,6 +231,9 @@ class Bottleneck(nn.Module):
             dtype=self.dtype,
         )(x)
 
+        if len(observe_layers_in_block) > 0 and 1 in observe_layers_in_block:
+            x = observe(self, x, idx=1)
+
         x = ops.batch_norm(
             x,
             train=train,
@@ -247,6 +258,9 @@ class Bottleneck(nn.Module):
             dtype=self.dtype,
         )(x)
 
+        if len(observe_layers_in_block) > 0 and 2 in observe_layers_in_block:
+            x = observe(self, x, idx=2)
+
         x = ops.batch_norm(
             x,
             train=train,
@@ -269,6 +283,9 @@ class Bottleneck(nn.Module):
             use_bias=False,
             dtype=self.dtype,
         )(x)
+
+        if len(observe_layers_in_block) > 0 and 3 in observe_layers_in_block:
+            x = observe(self, x, idx=3)
 
         x = ops.batch_norm(
             x,
@@ -367,7 +384,12 @@ class ResNet(nn.Module):
     dtype: str = "float32"
 
     customized_relu: Callable = nn.relu
-    use_observed_layer: bool = False
+    observe_layers: List[int] = field(
+        default_factory=lambda: [
+            4,
+        ]
+    )
+    observe_layers_in_last_block: List[int] = field(default_factory=lambda: [])
 
     def setup(self):
         self.param_dict = None
@@ -454,6 +476,9 @@ class ResNet(nn.Module):
                 dtype=self.dtype,
             )(x, act, train)
 
+        if len(self.observe_layers) > 0 and 1 in self.observe_layers:
+            x = observe(self, x, idx=1)
+
         # Layer 2
         for i in range(LAYERS[self.architecture][1]):
             params = (
@@ -470,6 +495,9 @@ class ResNet(nn.Module):
                 block_name=f"block2_{i}",
                 dtype=self.dtype,
             )(x, act, train)
+
+        if len(self.observe_layers) > 0 and 2 in self.observe_layers:
+            x = observe(self, x, idx=2)
 
         # Layer 3
         for i in range(LAYERS[self.architecture][2]):
@@ -488,28 +516,51 @@ class ResNet(nn.Module):
                 dtype=self.dtype,
             )(x, act, train)
 
+        if len(self.observe_layers) > 0 and 3 in self.observe_layers:
+            x = observe(self, x, idx=3)
+
         # Layer 4
+        # We also insert observe layer into the last block,
         for i in range(LAYERS[self.architecture][3]):
             params = (
                 None
                 if self.param_dict is None
                 else self.param_dict["layer4"][f"block{i}"]
             )
-            x = self.block(
-                features=512,
-                customized_relu=self.customized_relu,
-                kernel_size=(3, 3),
-                downsample=i == 0,
-                param_dict=params,
-                block_name=f"block4_{i}",
-                dtype=self.dtype,
-            )(x, act, train)
+
+            if i == LAYERS[self.architecture][3] - 1 and (
+                len(self.observe_layers_in_last_block) != 0
+            ):
+                x = self.block(
+                    features=512,
+                    customized_relu=self.customized_relu,
+                    kernel_size=(3, 3),
+                    downsample=i == 0,
+                    param_dict=params,
+                    block_name=f"block4_{i}",
+                    dtype=self.dtype,
+                )(
+                    x,
+                    act,
+                    train,
+                    observe_layers_in_block=self.observe_layers_in_last_block,
+                )
+            else:
+                x = self.block(
+                    features=512,
+                    customized_relu=self.customized_relu,
+                    kernel_size=(3, 3),
+                    downsample=i == 0,
+                    param_dict=params,
+                    block_name=f"block4_{i}",
+                    dtype=self.dtype,
+                )(x, act, train)
 
         x = x  # For debugging purposes
 
         # Add observed layer for Grad-CAM
-        if self.use_observed_layer:
-            x = observe(self, x)
+        if len(self.observe_layers) > 0 and 4 in self.observe_layers:
+            x = observe(self, x, idx=4)
 
         # Classifier
         x = jnp.mean(x, axis=(1, 2))
@@ -548,7 +599,8 @@ def ResNet18(
     ckpt_dir=None,
     dtype="float32",
     customized_relu: Callable = nn.relu,
-    use_observed_layer: bool = False,
+    observe_layers: List[int] = field(default_factory=lambda: [4]),
+    observe_layers_in_last_block: List[int] = field(default_factory=lambda: []),
 ):
     """
     Implementation of the ResNet18 by He et al.
@@ -597,7 +649,8 @@ def ResNet18(
         ckpt_dir=ckpt_dir,
         dtype=dtype,
         customized_relu=customized_relu,
-        use_observed_layer=use_observed_layer,
+        observe_layers=observe_layers,
+        observe_layers_in_last_block=observe_layers_in_last_block,
     )
 
 
@@ -611,7 +664,8 @@ def ResNet34(
     ckpt_dir=None,
     dtype="float32",
     customized_relu: Callable = nn.relu,
-    use_observed_layer: bool = False,
+    observe_layers: List[int] = field(default_factory=lambda: [4]),
+    observe_layers_in_last_block: List[int] = field(default_factory=lambda: []),
 ):
     """
     Implementation of the ResNet34 by He et al.
@@ -660,7 +714,8 @@ def ResNet34(
         ckpt_dir=ckpt_dir,
         dtype=dtype,
         customized_relu=customized_relu,
-        use_observed_layer=use_observed_layer,
+        observe_layers=observe_layers,
+        observe_layers_in_last_block=observe_layers_in_last_block,
     )
 
 
@@ -674,7 +729,8 @@ def ResNet50(
     ckpt_dir=None,
     dtype="float32",
     customized_relu: Callable = nn.relu,
-    use_observed_layer: bool = False,
+    observe_layers: List[int] = field(default_factory=lambda: [4]),
+    observe_layers_in_last_block: List[int] = field(default_factory=lambda: []),
 ):
     """
     Implementation of the ResNet50 by He et al.
@@ -723,7 +779,8 @@ def ResNet50(
         ckpt_dir=ckpt_dir,
         dtype=dtype,
         customized_relu=customized_relu,
-        use_observed_layer=use_observed_layer,
+        observe_layers=observe_layers,
+        observe_layers_in_last_block=observe_layers_in_last_block,
     )
 
 
@@ -737,7 +794,8 @@ def ResNet101(
     ckpt_dir=None,
     dtype="float32",
     customized_relu: Callable = nn.relu,
-    use_observed_layer: bool = False,
+    observe_layers: List[int] = field(default_factory=lambda: [4]),
+    observe_layers_in_last_block: List[int] = field(default_factory=lambda: []),
 ):
     """
     Implementation of the ResNet101 by He et al.
@@ -786,7 +844,8 @@ def ResNet101(
         ckpt_dir=ckpt_dir,
         dtype=dtype,
         customized_relu=customized_relu,
-        use_observed_layer=use_observed_layer,
+        observe_layers=observe_layers,
+        observe_layers_in_last_block=observe_layers_in_last_block,
     )
 
 
@@ -800,7 +859,8 @@ def ResNet152(
     ckpt_dir=None,
     dtype="float32",
     customized_relu: Callable = nn.relu,
-    use_observed_layer: bool = False,
+    observe_layers: List[int] = field(default_factory=lambda: [4]),
+    observe_layers_in_last_block: List[int] = field(default_factory=lambda: []),
 ):
     """
     Implementation of the ResNet152 by He et al.
@@ -849,5 +909,6 @@ def ResNet152(
         ckpt_dir=ckpt_dir,
         dtype=dtype,
         customized_relu=customized_relu,
-        use_observed_layer=use_observed_layer,
+        observe_layers=observe_layers,
+        observe_layers_in_last_block=observe_layers_in_last_block,
     )
